@@ -1,4 +1,5 @@
 module "cloud_tags" {
+  source = "git@github.com:LEGO/tf-cloud-tags.git"
 
   tag_dataclassification               = "Green"
   tag_environment                      = reverse(split("/", abspath(path.root)))[0]
