@@ -13,13 +13,6 @@ on:
       project:
         type: string
         description: The terraform project
-      dependency_app_id:
-        type: string
-        description: |
-          If terraform needs to clone other repos, this can be set, to allow generating github token with a custom
-          github app. Note that corresponding secret DEPENDENCY_AUTH_APP_PRIVATE_KEY must then also be configured in repo.
-          By default, it uses the github app belonging to DCI team for getting deps.
-        default: "962560"
     outputs:
       changes:
         description: "Boolean indicating if terraform has planned changes or not."
