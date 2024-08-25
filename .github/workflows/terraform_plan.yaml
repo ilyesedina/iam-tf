@@ -64,15 +64,6 @@ jobs:
           only-profile: true
           whoami: true
 
-      - name: Generate GitHub token for cloning terraform module dependencies from other repositories
-        id: generate-token
-        if: github.secret_source != 'None'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ inputs.dependency_app_id }}
-          private-key: ${{ secrets.DEPENDENCY_AUTH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Inject github token into LEGO git urls to make terraform module download work
         if: github.secret_source != 'None'
         run: |
