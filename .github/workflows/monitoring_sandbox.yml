@@ -19,14 +19,14 @@ permissions:
 
 jobs:
   terraform-plan:
-    uses: ".github\workflows\terraform_plan.yaml"
+    uses: "./.github/workflows/terraform_plan.yaml"
     with:
       env: sandbox_plan
       environment: sandbox
       project: iam
     secrets: inherit
   terraform-apply:
-    uses: ".github\workflows\terraform_apply.yaml"
+    uses: "./.github/workflows/terraform_apply.yaml"
     with:
       env: sandbox_deploy
       environment: sandbox
