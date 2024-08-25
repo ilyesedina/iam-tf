@@ -13,13 +13,6 @@ on:
       project:
         type: string
         description: The terraform project
-      dependency_app_id:
-        type: string
-        description: |
-          If terraform needs to clone other repos, this can be set, to allow generating github token with a custom
-          github app. Note that corresponding secret DEPENDENCY_AUTH_APP_PRIVATE_KEY must then also be configured in repo.
-          By default, it uses the github app belonging to DCI team for getting deps.
-        default: "962560"
     outputs:
       changes:
         description: "Boolean indicating if terraform has planned changes or not."
@@ -63,15 +56,6 @@ jobs:
           profile: ${{ steps.extract_aws_profile.outputs.REQUIRED_AWS_PROFILE }}
           only-profile: true
           whoami: true
-
-      - name: Generate GitHub token for cloning terraform module dependencies from other repositories
-        id: generate-token
-        if: github.secret_source != 'None'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ inputs.dependency_app_id }}
-          private-key: ${{ secrets.DEPENDENCY_AUTH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
 
       - name: Inject github token into LEGO git urls to make terraform module download work
         if: github.secret_source != 'None'
