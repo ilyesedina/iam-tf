@@ -1,0 +1,37 @@
+name: IAM - sandbox
+run-name: IAM - sandbox by '@${{ github.actor }}'
+
+defaults:
+  run:
+    working-directory: 'iam/environments/sandbox'
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'iam/environments/sandbox/**'
+      - 'iam/modules/**'
+
+permissions:
+      id-token: write   # This is required for requesting the JWT through OIDC
+      contents: read    # This is required for actions/checkout
+      packages: read
+
+jobs:
+  terraform-plan:
+    uses: ".github\workflows\terraform_plan.yaml"
+    with:
+      env: sandbox_plan
+      environment: sandbox
+      project: iam
+    secrets: inherit
+  terraform-apply:
+    uses: ".github\workflows\terraform_apply.yaml"
+    with:
+      env: sandbox_deploy
+      environment: sandbox
+      project: iam
+    secrets: inherit
+    needs: terraform-plan
+    if: needs.terraform-plan.outputs.changes == 'true'
+

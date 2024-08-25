@@ -1,0 +1,85 @@
+name: apply
+run-name: terraform apply by '@${{ github.actor }}'
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        type: string
+        description: Github env to pull vars and secrets from
+      environment:
+        type: string
+        description: Environment for folder structure
+      project:
+        type: string
+        description: The terraform project
+      dependency_app_id:
+        type: string
+        description: |
+          If terraform needs to clone other repos, this can be set, to allow generating github token with a custom
+          github app. Note that corresponding secret DEPENDENCY_AUTH_APP_PRIVATE_KEY must then also be configured in repo.
+          By default, it uses the github app belonging to DCI team for getting deps.
+        default: "962560"
+
+permissions:
+  id-token: write   # This is required for requesting the JWT through OIDC
+  contents: read    # This is required for actions/checkout
+
+jobs:
+  terraform-apply:
+    name: Terraform ${{ matrix.action_matrix_var }} ${{ matrix.env_matrix_var }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    steps:
+      - name: Git clone the repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Extract aws_profile
+        run: |
+          echo "REQUIRED_AWS_PROFILE=$(grep profile providers.tf  |awk '{print $3}' |sed 's/\"//g'|head -1 | sed 's/${local.environment}/${{inputs.environment}}/')" >> $GITHUB_OUTPUT
+        id: extract_aws_profile
+        working-directory: '${{ inputs.project }}/environments/${{ inputs.environment }}'
+
+      - name: Extract aws_account_id
+        run: |
+          echo "AWS_ACCOUNT_ID=$(grep bucket state.tf | grep -o -E "[0-9]+")" >> $GITHUB_OUTPUT
+        id: extract_aws_account_id
+        working-directory: '${{ inputs.project }}/environments/${{ inputs.environment }}'
+
+      - name: Configure AWS credentials with profile
+        uses: Moulick/configure-multiple-aws-roles@v4
+        with:
+          role-to-assume: "arn:aws:iam::${{ steps.extract_aws_account_id.outputs.AWS_ACCOUNT_ID }}:role/assumerole-oidc-github.com"
+          role-session-name: "run-${{ github.run_id }}"
+          aws-region: "eu-west-1"
+          profile: ${{ steps.extract_aws_profile.outputs.REQUIRED_AWS_PROFILE }}
+          only-profile: true
+          whoami: true
+
+      - name: Generate GitHub token for cloning terraform module dependencies from other repositories
+        id: generate-token
+        if: github.secret_source != 'None'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ inputs.dependency_app_id }}
+          private-key: ${{ secrets.DEPENDENCY_AUTH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Inject github token into LEGO git urls to make terraform module download work
+        if: github.secret_source != 'None'
+        run: |
+          git config --global url."https://oauth2:$GH_TOKEN@github.com/LEGO/".insteadOf "ssh://git@github.com/LEGO/";
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: '${{ inputs.project }}/environments/${{ inputs.environment }}'
+
+      - name: Terraform apply
+        run: terraform apply --auto-approve
+        working-directory: '${{ inputs.project }}/environments/${{ inputs.environment }}'
