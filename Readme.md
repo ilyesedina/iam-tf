@@ -28,7 +28,7 @@ To whitelist a repo, go to _AWS console -> CloudFormation -> Stack -> GitHubOIDC
 ### state.tf
 This is the terraform state backend configuration. It is used to extract `aws_account_id` assuming an s3 bucket is configured following the standard format. Example:
 
- `bucket         = "lego-qsc-813765349726"`
+ `bucket         = "lego-qsc-<account_id>"`
 
  It is also assumed that the state is placed in the same aws_account as the terraform ressources.
 
