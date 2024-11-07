@@ -1,0 +1,261 @@
+#
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  DynamoDBTableName:
+    Description: DynamoDB table name for Terraform state lock
+    Type: String
+    Default: lego-terraform-state-lock
+
+  EnableStateBucket:
+    Description: Enable/Disable creation of S3 state bucket and DynamoDB
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+
+  EnableGitHub:
+    Description: Enable/Disable GitHub OIDC Provider
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+
+  GitHubRepositories:
+    Description: Comma delimited list of repositories in GitHub
+    Type: CommaDelimitedList
+
+  EnableGitlab:
+    Description: Enable/Disable GitLab OIDC Provider
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+
+  GitLabRepositories:
+    Description: Comma delimited list of repositories in GitLab
+    Type: CommaDelimitedList
+
+  PolicyArns:
+    Description: Comma delimited list of policies to assign to assumed role
+    Type: CommaDelimitedList
+    Default: arn:aws:iam::aws:policy/AdministratorAccess
+
+Conditions:
+  EnableStateBucketIsTrue: !Equals
+    - !Ref EnableStateBucket
+    - "true"
+
+  EnableGitHubIsTrue: !Equals
+    - !Ref EnableGitHub
+    - "true"
+
+  EnableGitlabIsTrue: !Equals
+    - !Ref EnableGitlab
+    - "true"
+
+Resources:
+  KMSKey:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::KMS::Key
+    Properties:
+      BypassPolicyLockoutSafetyCheck: false
+      Description: Used for DynamaoDB and S3 buckets
+      EnableKeyRotation: true
+      Enabled: true
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      MultiRegion: false
+      Origin: AWS_KMS
+      PendingWindowInDays: 30
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableStateBucketIsTrue
+
+  KMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/lego-terraform-kms-${AWS::AccountId}
+      TargetKeyId: !GetAtt KMSKey.Arn
+    Condition: EnableStateBucketIsTrue
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "lego-terraform-statefiles-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt KMSKey.Arn
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: main
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 180
+            ExpiredObjectDeleteMarker: true
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 3
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableStateBucketIsTrue
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: "PutObjPolicy"
+        Statement:
+          - Sid: "DenyObjectsThatAreNotSSEKMSWithSpecificKey"
+            Principal: "*"
+            Effect: "Deny"
+            Action: "s3:PutObject"
+            Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+            Condition:
+              ArnNotEqualsIfExists:
+                "s3:x-amz-server-side-encryption-aws-kms-key-id": !GetAtt KMSKey.Arn
+    Condition: EnableStateBucketIsTrue
+
+  GitLabOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      ClientIdList:
+        - https://gitlab.legogroup.io
+      ThumbprintList:
+        - 9e99a48a9960b14926bb7f3b02e22da2b0ab7280
+      Url: https://gitlab.legogroup.io
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableGitlabIsTrue
+
+  DynamoDBTFStateLockTable:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref DynamoDBTableName
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema: # Required
+        - AttributeName: LockID
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TableClass: STANDARD_INFREQUENT_ACCESS
+      TimeToLiveSpecification:
+        Enabled: false
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        KMSMasterKeyId: !GetAtt KMSKey.Arn
+        SSEType: KMS
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableStateBucketIsTrue
+
+  GitLabOIDCRole:
+    Type: AWS::IAM::Role
+    DependsOn:
+      - GitLabOIDCProvider
+    Properties:
+      RoleName: assumerole-oidc-gitlab.legogroup.io
+      Description: Used with GitLab to authenticate shared runners
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated:
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/gitlab.legogroup.io"
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                gitlab.legogroup.io:sub: !Split
+                  - ','
+                  - !Sub
+                    - project_path:${repository}:*
+                    - repository: !Join
+                        - ':*,project_path:'
+                        - !Ref "GitLabRepositories"
+      MaxSessionDuration: 3600
+      ManagedPolicyArns: !Ref PolicyArns
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableGitlabIsTrue
+
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 1b511abead59c6ce207077c0bf0e0043b1382612
+      Url: https://token.actions.githubusercontent.com
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableGitHubIsTrue
+
+  GitHubOIDCRole:
+    Type: AWS::IAM::Role
+    DependsOn:
+      - GitHubOIDCProvider
+    Properties:
+      RoleName: assumerole-oidc-github.com
+      Description: Used with GitHub to authenticate shared runners
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated:
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Split
+                  - ','
+                  - !Sub
+                    - repo:LEGO/${repository}:*
+                    - repository: !Join
+                        - :*,repo:LEGO/
+                        - !Ref "GitHubRepositories"
+      MaxSessionDuration: 3600
+      ManagedPolicyArns: !Ref PolicyArns
+      Tags:
+        - Key: ManagedWith
+          Value: CloudFormation
+    Condition: EnableGitHubIsTrue
+
+Outputs:
+  Version:
+    Description: The version of this cloudformation template
+    Value: '2024-01-16T13:02:48Z'
+  S3Bucket:
+    Description: S3 bucket for Terraform state files
+    Value: !Ref S3Bucket
+    Condition: EnableStateBucketIsTrue
+  DynamoDB:
+    Description: DynamoDB table for Terraform state lock
+    Value: !Ref DynamoDBTFStateLockTable
+    Condition: EnableStateBucketIsTrue
+  GitHubAssumeRole:
+    Description: IAM role for GitHub OIDC provider
+    Value: !Ref GitHubOIDCRole
+    Condition: EnableGitHubIsTrue
+  GitLabAssumeRole:
+    Description: IAM role for GitLab OIDC provider
+    Value: !Ref GitLabOIDCRole
+    Condition: EnableGitlabIsTrue
